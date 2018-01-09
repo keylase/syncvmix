@@ -10,11 +10,14 @@ import (
     "io/ioutil"
     "log"
     "encoding/xml"
+    "os/exec"
 )
 
 type Configuration struct {
   InVMIX string
   OutVMIX string
+  syncExternalExec bool
+  execCommand string
 }
 type VmixStatus struct {
     XMLName xml.Name `xml:"vmix"`
@@ -114,6 +117,15 @@ func main() {
     //     continue
     // }
 
+    if (configuration.syncExternalExec){
+      ffmpeg := exec.Command(configuration.execCommand)
+      ffmpegOut, err := ffmpeg.Output()
+      if err != nil {
+          panic(err)
+      }
+      fmt.Println("> ls -a -l -h")
+      fmt.Println(string(ffmpegOut))
+    }
 
     if xmlStr, err := getXML(configuration.InVMIX); err != nil {
         log.Printf("Failed to get XML: %v", err)
@@ -129,6 +141,9 @@ func main() {
         fmt.Printf("STREAMING: %#v\n", v.Streaming)
 
         if (v.Streaming){
+          if (configuration.syncExternalExec){
+            exec.Command(configuration.execCommand)
+          }
           getXML(configuration.OutVMIX + "?Function=StartStreaming")
         } else {
           getXML(configuration.OutVMIX + "?Function=StopStreaming")
