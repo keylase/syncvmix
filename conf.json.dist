@@ -2,5 +2,5 @@
   "inVMIX": "http://127.0.0.1:8088/api",
   "outVMIX": "http://127.0.0.1:8088/api",
   "syncExternalExec": true,
-  "execCommand": "ping ya.ru"
+  "execCommand": "ffmpeg -re -i $url -c copy -f mpegts /dev/null -y"
 }

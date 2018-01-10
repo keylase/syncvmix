@@ -1,28 +1,31 @@
 package main
+
 import (
-    // "net"
-    "os"
-    "time"
-    // "strings"
-    "encoding/json"
-    "fmt"
-    "net/http"
-    "io/ioutil"
-    "log"
-    "encoding/xml"
-    "os/exec"
+	"os"
+	"strings"
+	"time"
+
+	// "strings"
+	"encoding/json"
+	"encoding/xml"
+	"fmt"
+	"io/ioutil"
+	"log"
+	"net/http"
+
+	"github.com/go-cmd/cmd"
 )
 
 type Configuration struct {
-  InVMIX string
-  OutVMIX string
-  syncExternalExec bool
-  execCommand string
+	InVMIX           string
+	OutVMIX          string
+	SyncExternalExec bool
+	ExecCommand      string
 }
 type VmixStatus struct {
-    XMLName xml.Name `xml:"vmix"`
-    Version string   `xml:"version"`
-    Streaming bool `xml:"streaming"`
+	XMLName   xml.Name `xml:"vmix"`
+	Version   string   `xml:"version"`
+	Streaming bool     `xml:"streaming"`
 }
 
 // type Result struct {
@@ -33,7 +36,6 @@ type VmixStatus struct {
 //   		Groups  []string `xml:"Group>Value"`
 //   		Address
 // }
-
 
 // <vmix>
 // <version>20.0.0.27</version>
@@ -71,161 +73,191 @@ type VmixStatus struct {
 // </vmix>
 
 func getXML(url string) (string, error) {
-    resp, err := http.Get(url)
-    if err != nil {
-        return "", fmt.Errorf("GET error: %v", err)
-    }
-    defer resp.Body.Close()
+	resp, err := http.Get(url)
+	if err != nil {
+		return "", fmt.Errorf("GET error: %v", err)
+	}
+	defer resp.Body.Close()
 
-    if resp.StatusCode != http.StatusOK {
-        return "", fmt.Errorf("Status error: %v", resp.StatusCode)
-    }
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("Status error: %v", resp.StatusCode)
+	}
 
-    data, err := ioutil.ReadAll(resp.Body)
-    if err != nil {
-        return "", fmt.Errorf("Read body: %v", err)
-    }
+	data, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("Read body: %v", err)
+	}
 
-    // log.Println(data)
+	// log.Println(data)
 
-    return string(data), nil
+	return string(data), nil
 }
 
 func main() {
-  config, _ := os.Open("conf.json")
-  decoder := json.NewDecoder(config)
-  configuration := Configuration{}
+	config, _ := os.Open("conf.json")
+	decoder := json.NewDecoder(config)
+	configuration := Configuration{}
+	var c *cmd.Cmd
+	started := true
 
-  err := decoder.Decode(&configuration)
-  if err != nil {
-    fmt.Println("error:", err)
-  }
-  fmt.Println(configuration.InVMIX);
+	err := decoder.Decode(&configuration)
+	if err != nil {
+		fmt.Println("error:", err)
+	}
+	fmt.Println(configuration.InVMIX)
+	ffmpegPid := 0
 
-  for {
+	for {
 
-    //VMIX IN
-    // servAddrIn := configuration.InVMIX
-    // tcpAddrIn, err := net.ResolveTCPAddr("tcp", servAddrIn)
-    // if err != nil {
-    //     println("ResolveTCPAddrIN failed:", err.Error())
-    //     continue
-    // }
-    // connIn, err := net.DialTCP("tcp", nil, tcpAddrIn)
-    // if err != nil {
-    //     println("Dial VMIX IN failed:", err.Error())
-    //     continue
-    // }
+		//VMIX IN
+		// servAddrIn := configuration.InVMIX
+		// tcpAddrIn, err := net.ResolveTCPAddr("tcp", servAddrIn)
+		// if err != nil {
+		//     println("ResolveTCPAddrIN failed:", err.Error())
+		//     continue
+		// }
+		// connIn, err := net.DialTCP("tcp", nil, tcpAddrIn)
+		// if err != nil {
+		//     println("Dial VMIX IN failed:", err.Error())
+		//     continue
+		// }
 
-    if (configuration.syncExternalExec){
-      ffmpeg := exec.Command(configuration.execCommand)
-      ffmpegOut, err := ffmpeg.Output()
-      if err != nil {
-          panic(err)
-      }
-      fmt.Println("> ls -a -l -h")
-      fmt.Println(string(ffmpegOut))
-    }
+		fmt.Println("status: ", ffmpegPid, "started: ", started)
 
-    if xmlStr, err := getXML(configuration.InVMIX); err != nil {
-        log.Printf("Failed to get XML: %v", err)
-        getXML(configuration.OutVMIX + "?Function=StopStreaming")
-    } else {
+		if configuration.SyncExternalExec && ffmpegPid == 0 && started {
 
-        v:=VmixStatus{Version:""}
-        err := xml.Unmarshal([]byte(xmlStr), &v)
-        if err != nil {
-          fmt.Printf("error: %v", err)
-          // return
-        }
-        fmt.Printf("STREAMING: %#v\n", v.Streaming)
+			commandArray := strings.Fields(configuration.ExecCommand)
+			name := commandArray[0]
+			args := commandArray[1:len(commandArray)]
+			c = cmd.NewCmd(name, args...)
 
-        if (v.Streaming){
-          if (configuration.syncExternalExec){
-            exec.Command(configuration.execCommand)
-          }
-          getXML(configuration.OutVMIX + "?Function=StartStreaming")
-        } else {
-          getXML(configuration.OutVMIX + "?Function=StopStreaming")
-        }
-    }
+			fmt.Println(name, args)
+			c.Start()
+			time.Sleep(100 * time.Millisecond)
+			ffmpegPid = c.Status().PID
 
+			go func() {
+				ticker := time.NewTicker(1 * time.Second)
+				for _ = range ticker.C {
+					status := c.Status()
+					n := len(status.Stderr)
+					fmt.Println(status.Stderr[n-1])
+					if status.Complete || status.Error != nil {
+						fmt.Println("STOPPED", status.PID)
+						ticker.Stop()
+						ffmpegPid = 0
+					}
+				}
+			}()
 
+		}
 
-    //VMIX OUT
-    // servAddrOut := configuration.OutVMIX
-    // tcpAddrOut, err := net.ResolveTCPAddr("tcp", servAddrOut)
-    // if err != nil {
-    //     println("ResolveTCPAddr OUT failed:", err.Error())
-    //     continue
-    // }
-    // connOut, err := net.DialTCP("tcp", nil, tcpAddrOut)
-    // if err != nil {
-    //     println("Dial VMIX OUT failed:", err.Error())
-    //     continue
-    // }
+		if started == false {
+			c.Stop()
+		}
 
+		if xmlStr, err := getXML(configuration.InVMIX); err != nil {
+			log.Printf("Failed to get XML: %v", err)
+			getXML(configuration.OutVMIX + "?Function=StopStreaming")
+			started = false
+		} else {
 
-    // reply := make([]byte, 50)
-    // _, err = connIn.Read(reply)
-    // if err != nil {
-    //     println("Read from vmix IN failed:", err.Error())
-    //     continue
-    // }
-    // println("reply from VMIX In  server=", string(reply))
-    //
-    //
-    // reply = make([]byte, 50)
-    // _, err = connOut.Read(reply)
-    // if err != nil {
-    //     println("Read from vmix IN  failed:", err.Error())
-    //     continue
-    // }
-    //
-    // println("reply from VMIX Out server=", string(reply))
-    //
-    //
-    //
-    //
-    // strEcho := "XMLTEXT vmix/streaming\r\n"
-    // // strEcho := "FUNCTION StartStreaming\r\n";
-    //
-    // _, err = connIn.Write([]byte(strEcho))
-    // if err != nil {
-    //     println("Get data from VMIX In server failed:", err.Error())
-    //     continue
-    // }
-    //
-    // // println("write to server = ", strEcho)
-    //
-    // reply = make([]byte, 50)
-    //
-    // _, err = connIn.Read(reply)
-    // // if err != nil {
-    // //     println("Write to server failed:", err.Error())
-    // //     os.Exit(1)
-    // // }
-    //
-    // // println("reply from server=", string(reply))
-    // if (strings.Contains(string(reply), "True")){
-    //   println("Streaming ok")
-    //   // strEcho = "FUNCTION StopStreaming\r\n";
-    //   strEcho = "FUNCTION StartStreaming\r\n";
-    //
-    //   _,err = connOut.Write([]byte(strEcho))
-    // } else {
-    //   println("Not streaming")
-    //   // strEcho = "FUNCTION StartStreaming\r\n";
-    //   strEcho = "FUNCTION StopStreaming\r\n";
-    //
-    //   _,err = connOut.Write([]byte(strEcho))
-    //
-    //
-    // }
-    time.Sleep(500 * time.Millisecond)
-    //
-    // connIn.Close()
-    // connOut.Close()
-  }
+			v := VmixStatus{Version: ""}
+			err := xml.Unmarshal([]byte(xmlStr), &v)
+			if err != nil {
+				fmt.Printf("error: %v", err)
+			}
+			fmt.Printf("STREAMING: %#v\n", v.Streaming)
+
+			if v.Streaming {
+				if configuration.SyncExternalExec {
+					started = true
+				} else {
+					getXML(configuration.OutVMIX + "?Function=StartStreaming")
+				}
+
+			} else {
+				if configuration.SyncExternalExec {
+					started = false
+				} else {
+					getXML(configuration.OutVMIX + "?Function=StopStreaming")
+				}
+			}
+		}
+
+		//VMIX OUT
+		// servAddrOut := configuration.OutVMIX
+		// tcpAddrOut, err := net.ResolveTCPAddr("tcp", servAddrOut)
+		// if err != nil {
+		//     println("ResolveTCPAddr OUT failed:", err.Error())
+		//     continue
+		// }
+		// connOut, err := net.DialTCP("tcp", nil, tcpAddrOut)
+		// if err != nil {
+		//     println("Dial VMIX OUT failed:", err.Error())
+		//     continue
+		// }
+
+		// reply := make([]byte, 50)
+		// _, err = connIn.Read(reply)
+		// if err != nil {
+		//     println("Read from vmix IN failed:", err.Error())
+		//     continue
+		// }
+		// println("reply from VMIX In  server=", string(reply))
+		//
+		//
+		// reply = make([]byte, 50)
+		// _, err = connOut.Read(reply)
+		// if err != nil {
+		//     println("Read from vmix IN  failed:", err.Error())
+		//     continue
+		// }
+		//
+		// println("reply from VMIX Out server=", string(reply))
+		//
+		//
+		//
+		//
+		// strEcho := "XMLTEXT vmix/streaming\r\n"
+		// // strEcho := "FUNCTION StartStreaming\r\n";
+		//
+		// _, err = connIn.Write([]byte(strEcho))
+		// if err != nil {
+		//     println("Get data from VMIX In server failed:", err.Error())
+		//     continue
+		// }
+		//
+		// // println("write to server = ", strEcho)
+		//
+		// reply = make([]byte, 50)
+		//
+		// _, err = connIn.Read(reply)
+		// // if err != nil {
+		// //     println("Write to server failed:", err.Error())
+		// //     os.Exit(1)
+		// // }
+		//
+		// // println("reply from server=", string(reply))
+		// if (strings.Contains(string(reply), "True")){
+		//   println("Streaming ok")
+		//   // strEcho = "FUNCTION StopStreaming\r\n";
+		//   strEcho = "FUNCTION StartStreaming\r\n";
+		//
+		//   _,err = connOut.Write([]byte(strEcho))
+		// } else {
+		//   println("Not streaming")
+		//   // strEcho = "FUNCTION StartStreaming\r\n";
+		//   strEcho = "FUNCTION StopStreaming\r\n";
+		//
+		//   _,err = connOut.Write([]byte(strEcho))
+		//
+		//
+		// }
+		time.Sleep(500 * time.Millisecond)
+		//
+		// connIn.Close()
+		// connOut.Close()
+	}
 
 }
